@@ -1,0 +1,50 @@
+---
+title: "FMPH243B project 1"
+author: "Keren Hu"
+date: "2024-01-18"
+output: html_document
+---
+
+```{r}
+library(palmerpenguins)
+library(mice)
+```
+
+```{r}
+head(penguins)
+pairs(penguins)
+md.pattern(penguins)
+
+dat = palmerpenguins::penguins
+
+imp = mice(dat, m=10, method = "pmm", maxit = 10, seed = 1)
+
+dat_imp = complete(imp, 1)
+```
+
+
+# Missing value
+```{r}
+imp <- mice(penguins[-4,], method = "logreg")
+
+```
+
+
+# Splitting dataset
+```{r}
+# 70% train & 30% test
+
+
+
+```
+
+
+# Logistic regression
+```{r}
+
+fit.log <- glm( sex ~. , data = penguins, family = binomial)
+summary(fit.log)
+fit.log.step <- step(fit.log, direction = "backward")
+summary(fit.log.step)
+```
+
