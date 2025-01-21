@@ -2,49 +2,198 @@
 title: "FMPH243B project 1"
 author: "Keren Hu"
 date: "2024-01-18"
-output: html_document
+output:
+  pdf_document:
+    latex_engine: xelatex
 ---
 
-```{r}
+```{r, message=FALSE}
 library(palmerpenguins)
 library(mice)
+library(car)
+library(caret)
+library(class)
+library(glmnet)
+library(MASS)
+library(compareGroups)
+library(methods)
+library(tree)
+library(randomForest)
+library(leaps)
+library(Rfast)
+library(ggplot2)
+library(GGally)
 ```
 
 ```{r}
-head(penguins)
-pairs(penguins)
-md.pattern(penguins)
+dat_og = palmerpenguins::penguins
 
-dat = palmerpenguins::penguins
-
-imp = mice(dat, m=10, method = "pmm", maxit = 10, seed = 1)
-
-dat_imp = complete(imp, 1)
+# Demographic description
+tab1 <- compareGroups(sex ~ ., data = dat_og[,-8])
+restab <- createTable(tab1)
+export2md(restab, caption = "Demographic characteristics of study participants")
 ```
+
 
 
 # Missing value
 ```{r}
-imp <- mice(penguins[-4,], method = "logreg")
+dat = dat_og[!is.na(dat_og$sex),]
 
+imp = mice(dat, m=5, method = "pmm", maxit = 5, seed = 2024)
+
+dat_imp = complete(imp, 1)
+dat_imp$sex = ifelse(dat_imp$sex=="female", 0, 
+                     ifelse(dat_imp$sex == "male",1, NA))
+
+table(dat_imp$sex)
 ```
 
 
 # Splitting dataset
 ```{r}
 # 70% train & 30% test
-
-
-
+set.seed(2024)
+index = sample(1:nrow(dat_imp), 0.7*nrow(dat_imp))
+train_dat = dat_imp[index, ]
+test_dat = dat_imp[-index, ]
 ```
 
 
 # Logistic regression
 ```{r}
-
-fit.log <- glm( sex ~. , data = penguins, family = binomial)
+fit.log <- glm( sex ~. , data = train_dat, family = binomial)
 summary(fit.log)
+
 fit.log.step <- step(fit.log, direction = "backward")
 summary(fit.log.step)
+
+log.pred = predict(fit.log.step, test_dat[, -7], type = "response")
+log.pred.class = factor(ifelse(log.pred>0.5, 1, 0))
+
+(tst.conf = table(log.pred>0.5, test_dat$sex))
+(tst.error = 1 - (tst.conf[1,1] + tst.conf[2,2])/sum(tst.conf)) # 0.13
+
+print(confusionMatrix(log.pred.class, as.factor(test_dat$sex)))
+
+par(pty="s")
+plot(log.pred, log.pred.class, col=test_dat$sex+10, pch=16)
+legend("right",legend = c("female", "male"),col=c(10,11), pch=16)
+```
+# LDA
+assumption: variances of all predictors are the same. 
+```{r}
+# fit.lda = MASS::lda(sex ~.,data = train_dat)
+# lda.pred = predict(fit.lda, newdata = test_dat[,-7], type = "response")
+# 
+# tst.conf = table(lda.pred$class, test_dat$sex)
+# (tst.error = 1 - (tst.conf[1,1] + tst.conf[2,2])/sum(tst.conf)) # 0.13
+# 
+# confusionMatrix(lda.pred$class, as.factor(test_dat$sex))
+```
+
+# QDA
+```{r}
+fit.qda = MASS::qda(sex ~.,data = train_dat)
+qda.pred = predict(fit.qda, newdata = test_dat[,-7])
+fit.qda
+
+tst.conf = table(qda.pred$class, test_dat$sex)
+(tst.error = 1 - (tst.conf[1,1] + tst.conf[2,2])/sum(tst.conf)) # 0.125
+
+confusionMatrix(qda.pred$class, as.factor(test_dat$sex))
+
+par(pty="s")
+plot(qda.pred$posterior[,2], qda.pred$class, col=test_dat$sex+10, pch=16)
+legend("right",legend = c("female", "male"),col=c(10,11), pch=16)
+```
+
+# kNN
+```{r}
+xxx <- as.matrix(train_dat[,-c(1,2,7)])
+yyy <- train_dat[,7]
+
+set.seed(2024)
+knn.res <- Rfast::knn.cv(x=xxx, y=yyy, nfolds = 10, stratified = FALSE, k=1:20, type = "C")
+
+(which.max(knn.res$crit)) # 12 
+
+plot(1:15, knn.res$crit, type = "b", xlab = "k", ylab = "Accuracy" )
+grid()
+
+
+knn.pred <- class::knn(test_dat[,-c(1,2,7)], test_dat[,-c(1,2,7)], test_dat[,7], which.max(knn.res$crit))
+
+(tst.conf = table(knn.pred, test_dat$sex))
+(tst.error = 1 - (tst.conf[1,1] + tst.conf[2,2])/sum(tst.conf)) # 0.18
+
+confusionMatrix(knn.pred, as.factor(test_dat$sex))
+
+```
+
+# Ridge
+```{r}
+set.seed(2024)
+gridd <- exp(seq(2,-6,-0.5))  ##lambda values
+
+xxx <- as.matrix(train_dat[,-7])
+yyy <- train_dat[,7]
+
+##cross-validation to select lambda
+cv.rdgeg <- cv.glmnet(xxx,yyy,family="binomial",alpha=0,
+                      lambda=gridd, nfolds=10,
+                      type.measure="class")
+par(pty="s")
+plot(cv.rdgeg, main= "Ridge")
+
+##ridge fit
+rdg.fit <- glmnet(xxx,yyy,family="binomial",alpha=0,lambda=cv.rdgeg$lambda.1se)
+
+ridge.pred <- predict(cv.rdgeg, s=cv.rdgeg$lambda.1se, 
+                      newx = as.matrix(test_dat[,-7]),
+                      type = "response")
+
+ridge.pred.class = factor(ifelse(ridge.pred>0.5, 1, 0))
+
+(tst.conf = table(ridge.pred>0.5, test_dat$sex))
+(tst.error = 1 - (tst.conf[1,1] + tst.conf[2,2])/sum(tst.conf)) # 0.08
+
+confusionMatrix(ridge.pred.class, as.factor(test_dat$sex))
+
+par(pty="s")
+plot(ridge.pred, ridge.pred.class, col=test_dat$sex+10, pch=16)
+legend("right",legend = c("female", "male"),col=c(10,11), pch=16)
+```
+
+
+# Classfication tree
+```{r}
+library(tree)
+set.seed(2024)
+t1 <- tree(sex~., data = train_dat)
+summary(t1)
+
+cv.t1 <- cv.tree(t1)
+plot(cv.t1$size,cv.t1$dev,type="b",cex=0.63)
+
+cv.t1$size[which(cv.t1$dev==min(cv.t1$dev))]
+
+prune.t1 = prune.tree(t1,best=7)
+###plot the tree
+par(pty="s")
+plot(prune.t1)
+text(prune.t1,pretty=0,cex=0.63)
+
+tree.pred = predict(prune.t1, newdata = test_dat)
+tree.pred.class = factor(ifelse(tree.pred>0.5, 1, 0))
+
+tst.conf = table(tree.pred>0.5, test_dat$sex)
+(tst.error = 1 - (tst.conf[1,1] + tst.conf[2,2])/sum(tst.conf)) # 0.096
+
+confusionMatrix(tree.pred.class, as.factor(test_dat$sex))
+
+par(pty="s")
+plot(tree.pred, tree.pred.class, col=test_dat$sex+10, pch=16)
+legend("right",legend = c("female", "male"),col=c(10,11), pch=16)
 ```
 
